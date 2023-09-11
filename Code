@@ -1,0 +1,243 @@
+from scene import *
+import sound
+import random
+import math
+A=Action
+P=Point
+
+def interpolate(p1, p2, scale):
+	'''helper function for interpolating'''
+	diff=p1-p2
+	return p1-diff*scale
+
+def distance(p1, p2):
+	'''helper function for finding distance'''
+	dx=p1[0]-p2[0]
+	dy=p1[1]-p2[1]
+	return math.sqrt(dx*dx+dy*dy)
+	
+def click(sprite, touch, hitbox_size=1):
+	'''helper function for getting click state'''
+	if not touch==None:
+		return sprite.frame.intersects(Rect(touch[0]-hitbox_size/2, touch[1]-hitbox_size/2, hitbox_size, hitbox_size))
+	
+def angle(pos, target):
+	'''helper function for finding angle'''
+	return -(math.atan2(target[1]-pos[1], target[0]-pos[0])+math.pi/2)#+math.pi
+	
+def retexture(object, texture):
+	'''helper function to assign texture approperately'''
+	if type(texture)==str:
+		object.texture=Texture(texture)
+	else:
+		object.texture=texture
+	object.main=texture
+
+def EMPTY(parent, object=None):
+	pass
+
+def empty_func(parent, object):
+	for tag in object.tags:
+		if tag in parent.func_standards:
+			parent.func_standards[tag](parent, object)
+			
+def empty_start(parent, object):
+	pass
+			
+def camera_routine(parent):
+	if parent.TOUCH:
+		parent.standby_position=(parent.TOUCH-parent.STOUCH)*-1
+	if parent.EETOUCH:
+		parent.camera_position=parent.standby_position+parent.camera_position
+		parent.standby_position=P(0, 0)
+		
+def update_camera(parent, object):
+	HALF=P(parent.size[0]/2, parent.size[1]/2)
+	
+	rot=math.radians(parent.camera_rotation)
+	screen_position=object.pos+HALF-((parent.camera_position+parent.standby_position)*object.parallax)
+	dis=distance(HALF, screen_position)*parent.camera_scale
+	dis_rot=angle(HALF, screen_position)+math.pi
+	object.position=P(math.sin(rot-dis_rot), math.cos(rot-dis_rot))*dis+HALF
+	
+	object.rotation=object.rot-rot
+	
+	object.scale=object.sca*parent.camera_scale*object.parallax
+
+class Game (Scene):
+	def __init__(self, start, func=EMPTY):
+		self.func=func
+		self.start=start
+		
+		self.fixed_time_step=True
+	
+	def setup(self):
+		self.ticks=0
+		self.speed=1
+		self.objects=[]
+		self.temps=[]
+		self.TOUCH=None
+		self.STOUCH=None
+		self.ETOUCH=None
+		self.SSTOUCH=None
+		self.EETOUCH=None
+		self.camera_position=P(0, 0)
+		self.standby_position=P(0, 0)
+		self.camera_rotation=0
+		self.camera_scale=1
+		self.tag_table={}
+		
+		self.start(self)
+		
+		for object in self.objects:
+			object.start(self, object)
+			
+	def find_tag(self, tag):
+		return self.tag_table[tag]
+	
+	def spawn_object(self, main, object_type=SpriteNode, **kwargs):
+		sprite=object_type(main, parent=self)
+		sprite.object_type=object_type
+		sprite.main=main
+		#sprite.parent=kwargs.get('parent', self)
+		
+		sprite.func=kwargs.get('func', EMPTY)
+		sprite.start=kwargs.get('start', empty_start)
+		sprite.parallax=kwargs.get('parallax', 1)
+		sprite.tags=[]
+		
+		if 'CAMERA_OBJECT' in kwargs.get('tags', []):
+			sprite.pos=kwargs.get('pos', [0, 0])
+			sprite.rot=kwargs.get('rot', 0)
+			sprite.sca=kwargs.get('sca', 1)
+			update_camera(self, sprite)
+		else:
+			sprite.position=kwargs.get('pos', [0, 0])
+			sprite.rotation=kwargs.get('rot', 0)
+			sprite.scale=kwargs.get('sca', 1)
+			
+		for key in kwargs:
+			attr, value=[key, kwargs[key]]
+			try:
+				setattr(sprite, attr, value)
+			except AttributeError:
+				pass
+		sprite.ticks=0
+		sprite.tags.append({SpriteNode:'sprite', LabelNode:'label', ShapeNode:'shape'}[object_type])
+		self.objects.append(sprite)
+		
+		for tag in sprite.tags:
+			self.tag_table[tag] = self.tag_table.get(tag, [])+[sprite]
+		
+		return sprite
+	
+	def spawn_temp_object(self, main, object_type=SpriteNode, **kwargs):
+		sprite=object_type(main, parent=self)
+		sprite.object_type=object_type
+		sprite.texture_name=main
+		sprite.parallax=kwargs.get('parallax', 1)
+		sprite.main=main
+
+		#sprite.parent=kwargs.get('parent', self)
+		
+		if 'CAMERA_OBJECT' in kwargs.get('tags', []):
+			sprite.pos=kwargs.get('pos', [0, 0])
+			sprite.rot=kwargs.get('rot', 0)
+			sprite.sca=kwargs.get('sca', 1)
+			update_camera(self, sprite)
+		else:
+			sprite.position=kwargs.get('pos', [0, 0])
+			sprite.rotation=kwargs.get('rot', 0)
+			sprite.scale=kwargs.get('sca', 1)
+		
+		sprite.tags=kwargs.get('tags', [])+[{SpriteNode:'sprite', LabelNode:'label', ShapeNode:'shape'}[object_type]]
+		self.temps.append(sprite)
+		return sprite
+	
+	def update(self):
+		#self.setup()
+		if self.ticks%(1/self.speed)==0:
+			self.func(self)
+			for temp in self.temps:
+				self.delete_temp(temp)
+			for object in self.objects:
+				if 'CAMERA_OBJECT' in object.tags:
+					update_camera(self, object)
+				self.update_object(object)
+				object.ticks+=1
+				if not 'CAMERA_OBJECT' in object.tags:
+					if 'pos' in dir(object):
+						object.position=object.pos
+					if 'rot' in dir(object):
+						object.rotation=object.rot
+					if 'sca' in dir(object):
+						object.scale=object.sca
+			self.SSTOUCH=None
+			self.EETOUCH=None
+		self.ticks+=1
+	
+	def delete_object(parent, object):
+		parent.objects.remove(object)
+		object.remove_from_parent()
+		for tag in object.tags:
+			parent.tag_table[tag].remove(object)
+		del object
+	
+	def delete_temp(parent, temp):
+		temp.remove_from_parent()
+		parent.temps.remove(temp)
+		del temp
+	
+	def screen_to_world(parent, screen, parallax=1):
+		HALF=P(parent.size[0]/2, parent.size[1]/2)
+	
+		rot=math.radians(parent.camera_rotation)
+		screen_position=screen-((parent.camera_position+parent.standby_position)*parallax)-HALF
+		dis=distance(HALF, screen_position)*parent.camera_scale
+		dis_rot=angle(HALF, screen_position)+math.pi
+		world=P(math.sin(rot-dis_rot), math.cos(rot-dis_rot))*dis+HALF
+		
+		return world
+	
+	def update_object(self, object):
+		object.func(self, object)
+	
+	def touch_began(self, touch):
+
+		self.TOUCH=touch.location
+		self.STOUCH=touch.location
+		self.SSTOUCH=touch.location
+		self.ETOUCH=None
+	
+	def touch_moved(self, touch):
+		self.TOUCH=touch.location
+	
+	def touch_ended(self, touch):
+		self.TOUCH=None
+		self.STOUCH=None
+		self.ETOUCH=touch.location
+		self.EETOUCH=touch.location
+
+if __name__ == '__main__':
+	
+	def follow_tap(parent, object):
+		if parent.SSTOUCH:
+			object.pos=parent.screen_to_world(parent.SSTOUCH)
+			#parent.camera_rotation+=random.randint(-10, 10)
+			#parent.camera_scale*=1.2
+		if not parent.camera_scale==1:
+			t=parent.spawn_temp_object('emj:Anchor', pos=object.pos, tags=['NON_CAMERA_OBJECT'])
+			t.alpha=0.5
+	def normalize(parent):
+		'''
+		parent.camera_rotation*=0.9
+		parent.camera_scale=(parent.camera_scale-1)*0.89+1
+		if parent.camera_scale<1.006:
+			parent.camera_scale=1'''
+		pass
+	def start(parent):
+		parent.camera_rotation=10
+		parent.spawn_object('plf:BG_Blue_shroom', tags=['CAMERA_OBJECT'], sca=3)
+		parent.spawn_object('emj:Anchor', tags=['anchor', 'CAMERA_OBJECT'], func=follow_tap)
+	G=Game(start, func=normalize)
+	run(G, show_fps=False)
